@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Space Dodger — single-file game</title>
+  <style>
+    :root{--bg:#0b1020;--panel:#0f1724;--accent:#45d6a6;--muted:#9aa4b2}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#030416 0%, #081023 100%);color:#e6eef6}
+    .wrap{width:940px;max-width:96vw;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);box-shadow:0 10px 30px rgba(2,6,23,0.6);border-radius:14px;padding:18px;display:grid;grid-template-columns:1fr 300px;gap:16px}
+    .game-panel{background:radial-gradient(circle at 30% 10%, rgba(69,214,166,0.04), transparent), #071024;border-radius:8px;padding:12px;display:flex;flex-direction:column}
+    canvas{background:linear-gradient(180deg,#031022 0%, #071433 100%);border-radius:6px;width:100%;height:600px;display:block}
+    .sidebar{background:var(--panel);padding:12px;border-radius:8px}
+    h1{font-size:18px;margin:6px 0;color:var(--accent)}
+    .stat{display:flex;justify-content:space-between;padding:10px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:8px}
+    button{appearance:none;border:0;border-radius:8px;padding:10px 12px;background:var(--accent);color:#022;cursor:pointer;font-weight:600}
+    .muted{color:var(--muted);font-size:13px}
+    .controls{display:flex;gap:8px;margin-top:8px}
+    .hint{margin-top:8px;font-size:13px;color:var(--muted)}
+    .footer{margin-top:auto;font-size:12px;color:var(--muted)}
+    #adminPanel{display:none;margin-top:12px;padding:10px;border:1px solid var(--muted);border-radius:8px;background:rgba(255,255,255,0.05)}
+    #adminPanel label{display:block;margin-top:6px;font-size:13px}
+    #adminPanel input{width:100%}
+    @media (max-width:900px){.wrap{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game-panel">
+      <h1>Space Dodger</h1>
+      <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
+      <div class="footer muted">Use left/right arrows, A/D or touch the sides to move. Avoid asteroids and get a high score!</div>
+    </div>
+
+    <div class="sidebar">
+      <div class="stat"><div>Score</div><div id="score">0</div></div>
+      <div class="stat"><div>High Score</div><div id="highscore">0</div></div>
+      <div class="stat"><div>Level</div><div id="level">1</div></div>
+
+      <div style="margin-top:12px">
+        <button id="startBtn">Start</button>
+        <button id="pauseBtn" style="margin-left:8px">Pause</button>
+      </div>
+
+      <div class="hint">Settings</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <label class="muted">Asteroid rate
+          <input id="rate" type="range" min="400" max="1200" value="800">
+        </label>
+      </div>
+
+      <div class="hint">Controls</div>
+      <div class="muted">Keyboard: ← →  or A/D<br>Touch: tap left/right halves of canvas</div>
+
+      <div style="margin-top:14px">
+        <button id="restartBtn" style="background:#e85d5d;color:white">Restart</button>
+      </div>
+
+      <div style="margin-top:14px">
+        <button id="adminBtn" style="background:#555;color:white">Admin Settings</button>
+        <div id="adminPanel">
+          <label>Asteroid Rate (ms)
+            <input id="adminRate" type="number" value="800">
+          </label>
+          <label>Asteroid Speed Multiplier
+            <input id="adminSpeed" type="number" step="0.1" value="1">
+          </label>
+          <button id="applyAdmin">Apply</button>
+        </div>
+      </div>
+
+      <div style="height:8px"></div>
+      <div class="muted" style="font-size:13px">Built with plain HTML/JS/CSS — single file. Want power-ups, more enemies, or different art? Ask and I'll add it.</div>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let width = canvas.width, height = canvas.height;
+
+const player = {x: width/2, y: height - 60, radius: 14, speed: 6, vx:0};
+let keys = {};
+
+let asteroids = [];
+let lastSpawn = 0;
+let spawnInterval = 800;
+let asteroidSpeedMultiplier = 1;
+
+let score = 0, high = 0, level = 1;
+let running = false, paused = false;
+let lastTime = 0;
+
+const scoreEl = document.getElementById('score');
+const highEl = document.getElementById('highscore');
+const levelEl = document.getElementById('level');
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const restartBtn = document.getElementById('restartBtn');
+const rateSlider = document.getElementById('rate');
+
+const adminBtn = document.getElementById('adminBtn');
+const adminPanel = document.getElementById('adminPanel');
+const adminRate = document.getElementById('adminRate');
+const adminSpeed = document.getElementById('adminSpeed');
+const applyAdmin = document.getElementById('applyAdmin');
+
+function resize(){
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.floor(rect.width * ratio);
+  canvas.height = Math.floor(rect.height * ratio);
+  width = canvas.width; height = canvas.height;
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if(['arrowleft','arrowright','a','d'].includes(e.key.toLowerCase())) e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const x = t.clientX - rect.left;
+  if(x < rect.width/2) { keys['left'] = true; setTimeout(()=>keys['left']=false, 120);} else { keys['right'] = true; setTimeout(()=>keys['right']=false, 120);} 
+}, {passive:false});
+
+function rand(min,max){return Math.random()*(max-min)+min}
+function spawnAsteroid(){
+  const r = rand(12,40);
+  asteroids.push({x: rand(r, width - r), y: -r, r, vy: (rand(1.2 + level*0.2, 2.2 + level*0.6)) * asteroidSpeedMultiplier, rot: rand(0,Math.PI*2), rotSpeed: rand(-0.03,0.03) });
+}
+
+function reset(){
+  asteroids = [];
+  score = 0; level = 1; lastSpawn = 0; running = false; paused = false;
+  player.x = width/2; player.vx = 0;
+  updateUI();
+}
+
+function updateUI(){ scoreEl.textContent = Math.floor(score); highEl.textContent = Math.floor(high); levelEl.textContent = level; }
+
+function collide(a,b){
+  const dx = a.x - b.x; const dy = a.y - b.y; const dist = Math.hypot(dx,dy);
+  return dist < (a.radius ?? a.r) + (b.radius ?? b.r);
+}
+
+function gameLoop(ts){
+  if(!running || paused) { lastTime = ts; requestAnimationFrame(gameLoop); return; }
+  const dt = Math.min(40, ts - lastTime);
+  lastTime = ts;
+
+  // Only update spawnInterval from slider if admin panel not overriding
+  if(!adminActive){
+    spawnInterval = Number(rateSlider.value);
+  }
+
+  lastSpawn += dt;
+  if(lastSpawn > spawnInterval){ spawnAsteroid(); lastSpawn = 0; }
+
+  const left = keys['arrowleft'] || keys['a'] || keys['left'];
+  const right = keys['arrowright'] || keys['d'] || keys['right'];
+  if(left && !right) player.vx = -player.speed;
+  else if(right && !left) player.vx = player.speed;
+  else player.vx = 0;
+
+  player.x += player.vx;
+  player.x = Math.max(player.radius, Math.min((canvas.getBoundingClientRect().width) - player.radius, player.x));
+
+  for(let i=asteroids.length-1;i>=0;i--){
+    const a = asteroids[i];
+    a.y += a.vy * (dt/16);
+    a.rot += a.rotSpeed * (dt/16);
+    if(a.y - a.r > canvas.getBoundingClientRect().height + 50) { asteroids.splice(i,1); score += 1; if(score % 25 === 0) levelUp(); }
+  }
+
+  for(const a of asteroids){ if(collide({x:player.x,y:player.y,radius:player.radius}, {x:a.x,y:a.y,r:a.r})){ gameOver(); return; } }
+
+  draw();
+  updateUI();
+  requestAnimationFrame(gameLoop);
+}
+
+function levelUp(){ level++; for(let i=0;i<2;i++) spawnAsteroid(); }
+
+function gameOver(){ running = false; paused = false; if(score > high) high = score; updateUI(); flashGameOver(); }
+
+function flashGameOver(){
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.fillStyle = '#fff'; ctx.font = '30px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Game Over', canvas.getBoundingClientRect().width/2, canvas.getBoundingClientRect().height/2 - 10);
+  ctx.font = '16px sans-serif';
+  ctx.fillText('Press Start or Restart to play again', canvas.getBoundingClientRect().width/2, canvas.getBoundingClientRect().height/2 + 24);
+  ctx.restore();
+}
+
+function draw(){
+  const w = canvas.getBoundingClientRect().width;
+  const h = canvas.getBoundingClientRect().height;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawStars(w,h);
+  for(const a of asteroids){
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    ctx.rotate(a.rot);
+    ctx.beginPath();
+    ctx.moveTo(-a.r*0.6, -a.r*0.2);
+    ctx.lineTo(-a.r*0.2, -a.r*0.7);
+    ctx.lineTo(a.r*0.6, -a.r*0.1);
+    ctx.lineTo(a.r*0.3, a.r*0.6);
+    ctx.lineTo(-a.r*0.5, a.r*0.5);
+    ctx.closePath();
+    ctx.fillStyle = '#6b6f76'; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.beginPath();
+  ctx.moveTo(0, -player.radius - 6);
+  ctx.lineTo(-player.radius, player.radius + 6);
+  ctx.lineTo(player.radius, player.radius + 6);
+  ctx.closePath();
+  ctx.fillStyle = '#45d6a6'; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.stroke();
+  ctx.restore();
+}
+
+let starCache = null;
+function drawStars(w,h){
+  if(!starCache || starCache.w !== w || starCache.h !== h){
+    const sCount = Math.max(60, Math.floor(w*h/6000));
+    const stars = [];
+    for(let i=0;i<sCount;i++) stars.push({x:rand(0,w), y:rand(0,h), r:Math.random()>.9?2:1, a:rand(0.2,0.9)});
+    starCache = {w,h,stars};
+  }
+  ctx.save();
+  for(const s of starCache.stars){ ctx.beginPath(); ctx.globalAlpha = s.a; ctx.fillStyle = '#fff'; ctx.arc(s.x, s.y, s.r,0,Math.PI*2); ctx.fill(); }
+  ctx.restore();
+}
+
+startBtn.addEventListener('click', ()=>{ if(!running){ running=true; paused=false; lastTime = performance.now(); requestAnimationFrame(gameLoop);} });
+pauseBtn.addEventListener('click', ()=>{ if(!running) return; paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; });
+restartBtn.addEventListener('click', ()=>{ if(score > high) high = score; reset(); running=true; lastTime = performance.now(); requestAnimationFrame(gameLoop); });
+
+let adminActive = false;
+rateSlider.addEventListener('input', ()=>{ if(!adminActive) spawnInterval = Number(rateSlider.value); });
+
+adminBtn.addEventListener('click', ()=>{ adminPanel.style.display = adminPanel.style.display==='none'?'block':'none'; });
+applyAdmin.addEventListener('click', ()=>{
+  spawnInterval = Number(adminRate.value) || 800;
+  asteroidSpeedMultiplier = Number(adminSpeed.value) || 1;
+  adminActive = true;
+});
+
+setInterval(()=>{
+  const rect = canvas.getBoundingClientRect();
+  const left = keys['arrowleft'] || keys['a'] || keys['left'];
+  const right = keys['arrowright'] || keys['d'] || keys['right'];
+  if(left && !right) player.x -= player.speed*0.9;
+  else if(right && !left) player.x += player.speed*0.9;
+  player.x = Math.max(player.radius, Math.min(rect.width - player.radius, player.x));
+}, 16);
+
+reset();
+canvas.addEventListener('click', ()=>canvas.focus());
+</script>
+</body>
+</html>
